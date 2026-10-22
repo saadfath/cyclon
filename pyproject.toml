@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cyclon"
+version = "0.1.0"
+description = "CLI tool that uses the Grok (xAI) API to scan your code for bugs."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.0",
+    "requests>=2.28",
+]
+
+[project.scripts]
+cyclon = "cyclon.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cyclon*"]
