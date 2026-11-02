@@ -99,8 +99,9 @@ def cli():
 @click.option("--no-cache", is_flag=True, help="Disable scan cache.")
 @click.option("--clear-cache", is_flag=True, help="Clear scan cache before running.")
 @click.option("--agents", default=None, help="Comma-separated agent names (optional).")
+@click.option("--events", is_flag=True, help="Emit machine-readable JSONL progress events on stderr.")
 def scan_cmd(path, output, model, extensions, max_size, concurrency, as_json, dry_run,
-             includes, excludes, extra_prompt, keys, models, html_path, no_open, no_cache, clear_cache, agents):
+             includes, excludes, extra_prompt, keys, models, html_path, no_open, no_cache, clear_cache, agents, events):
     """Scan PATH (file or directory) for bugs."""
     root = Path(path).resolve()
     ext_set = None
@@ -181,9 +182,21 @@ def scan_cmd(path, output, model, extensions, max_size, concurrency, as_json, dr
         f = focuses[i] if i < len(focuses) else "Perform a thorough code review."
         system_prompts.append(sys_prompt + "\n\nSpecialization: " + f)
 
-    def progress(msg):
-        if not as_json:
-            click.echo(msg, err=True)
+    if events:
+        import threading
+        event_lock = threading.Lock()
+
+        def emit(event):
+            with event_lock:
+                click.echo("@@cyclon@@ " + json.dumps(event, default=str), err=True)
+
+        progress = None
+    else:
+        emit = None
+
+        def progress(msg):
+            if not as_json:
+                click.echo(msg, err=True)
 
     if clear_cache:
         from pathlib import Path as _P
@@ -196,13 +209,14 @@ def scan_cmd(path, output, model, extensions, max_size, concurrency, as_json, dr
     use_cache = not no_cache
 
     # Banner
-    if not as_json:
+    if not as_json and not events:
         _banner()
 
     result = scan_agents(
         root, clients, agent_names=agent_names, extensions=None, max_size=max_size,
         concurrency=concurrency, progress=progress, system_prompt=sys_prompt,
         system_prompts=system_prompts, files=files, split_work=True, use_cache=use_cache,
+        event=emit,
     )
 
     _render(result, as_json)

@@ -117,7 +117,7 @@ def _chunks(text: str) -> list[tuple[int, str]]:
     return chunks
 
 
-def scan_file(client: GrokClient, path: Path, root: Path, system_prompt: str | None = None, agent: str = "") -> tuple[list[Finding], str | None]:
+def scan_file(client: GrokClient, path: Path, root: Path, system_prompt: str | None = None, agent: str = "", on_finding: Callable[[Finding], None] | None = None) -> tuple[list[Finding], str | None]:
     if system_prompt is None:
         system_prompt = DEFAULT_SYSTEM_PROMPT
     try:
@@ -161,6 +161,8 @@ def scan_file(client: GrokClient, path: Path, root: Path, system_prompt: str | N
                 raw=item,
             )
             findings.append(f)
+            if on_finding is not None:
+                on_finding(f)
     return findings, None
 
 
@@ -218,17 +220,33 @@ def scan_agents(
     files: list[Path] | None = None,
     split_work: bool = False,
     use_cache: bool = True,
+    event: Callable[[dict], None] | None = None,
 ) -> ScanResult:
     if system_prompt is None:
         system_prompt = DEFAULT_SYSTEM_PROMPT
     if agent_names is None:
         agent_names = [f"Agent {i+1}" for i in range(len(clients))]
+
+    def emit(payload: dict) -> None:
+        if event is not None:
+            event(payload)
+
     result = ScanResult(root=str(root))
     if files is None:
         files = collect_files(root, extensions=extensions, max_size=max_size)
     if not files or not clients:
         result.files_scanned = len(files)
+        emit({
+            "type": "start", "root": str(root), "files": len(files),
+            "agents": list(agent_names), "models": [c.model for c in clients],
+        })
+        emit({"type": "done", "files_scanned": len(files), "findings": 0, "errors": 0})
         return result
+
+    emit({
+        "type": "start", "root": str(root), "files": len(files),
+        "agents": list(agent_names), "models": [c.model for c in clients],
+    })
 
     cache = _load_cache() if use_cache else {"entries": {}}
     entries = cache.setdefault("entries", {})
@@ -241,7 +259,9 @@ def scan_agents(
     def work(item):
         p, ci = item
         client = clients[ci]
-        agent = agent_names[ci]
+        agent = agent_names[ci] if ci < len(agent_names) else f"Agent {ci+1}"
+        rel = str(p.relative_to(root)) if root.is_dir() else str(p)
+        emit({"type": "file_start", "file": rel, "agent": agent})
         if system_prompts and ci < len(system_prompts):
             sp = system_prompts[ci]
         else:
@@ -255,9 +275,19 @@ def scan_agents(
             cached = entries.get(cache_key)
             if cached and cached.get("mtime") == mtime:
                 fs = [_dict_to_finding(d) for d in cached.get("findings", [])]
+                for f in fs:
+                    emit({"type": "finding", "file": rel, "agent": agent, "finding": _finding_to_dict(f)})
+                emit({"type": "file_done", "file": rel, "agent": agent, "count": len(fs), "cached": True})
                 return p, agent, fs, None
         scan_root = root if root.is_dir() else p.parent
-        fs, err = scan_file(client, p, scan_root, system_prompt=sp, agent=agent)
+
+        def on_finding(f: Finding) -> None:
+            emit({"type": "finding", "file": rel, "agent": agent, "finding": _finding_to_dict(f)})
+
+        fs, err = scan_file(client, p, scan_root, system_prompt=sp, agent=agent, on_finding=on_finding)
+        if err:
+            emit({"type": "error", "file": rel, "agent": agent, "message": err})
+        emit({"type": "file_done", "file": rel, "agent": agent, "count": len(fs)})
         if use_cache and err is None:
             try:
                 mtime = p.stat().st_mtime
@@ -291,4 +321,10 @@ def scan_agents(
     result.files_scanned = len(files)
     if use_cache:
         _save_cache(cache)
+    emit({
+        "type": "done",
+        "files_scanned": len(files),
+        "findings": len(result.findings),
+        "errors": len(result.errors),
+    })
     return result
