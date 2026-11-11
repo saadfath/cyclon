@@ -1,0 +1,184 @@
+# Insecure Deserialization
+
+## 1. Overview
+
+Insecure Deserialization occurs when an application deserializes untrusted or manipulated data without properly validating its contents or ensuring that the data comes from a trusted source.
+
+Serialization converts objects or data structures into a format that can be stored or transmitted.
+
+Deserialization converts that serialized representation back into objects or data structures.
+
+Some serialization formats can represent complex objects and trigger application behavior during deserialization.
+
+Depending on the language, library, and implementation, insecure deserialization may lead to:
+
+- Remote code execution.
+- Unauthorized data manipulation.
+- Authentication bypass.
+- Denial of service.
+- Unexpected application behavior.
+
+## 2. Common Types
+
+### 2.1 Unsafe Object Deserialization
+
+Occurs when an application reconstructs complex objects from untrusted serialized input.
+
+Certain serialization mechanisms may invoke functions or constructors during object reconstruction.
+
+### 2.2 Untrusted Pickle Deserialization
+
+Python's pickle format can serialize Python objects.
+
+Deserializing untrusted pickle data is dangerous because the deserialization process can execute arbitrary code.
+
+### 2.3 Unsafe YAML Deserialization
+
+Some YAML loading configurations support constructing complex Python objects.
+
+Using unsafe YAML loading on untrusted input may introduce code execution risks.
+
+### 2.4 JSON Data Validation Issues
+
+JSON is generally safer than object serialization formats such as pickle because standard JSON parsing does not automatically reconstruct arbitrary Python objects.
+
+However, applications can still introduce vulnerabilities by trusting parsed values without validating their structure, types, or contents.
+
+## 3. Detection Indicators
+
+The scanner should investigate:
+
+- Untrusted data passed to deserialization functions.
+- Use of pickle.load() or pickle.loads() with external input.
+- Unsafe YAML loading.
+- Deserialization of data received from HTTP requests.
+- Deserialization of data from untrusted files.
+- Custom object reconstruction mechanisms.
+- Missing integrity verification where serialized data requires it.
+- Application logic that trusts deserialized objects without validation.
+
+## 4. Potentially Vulnerable Patterns
+
+### 4.1 Python Pickle
+
+Example:
+
+    import pickle
+    from flask import request
+
+    @app.route("/load")
+    def load_data():
+        data = request.data
+        obj = pickle.loads(data)
+        return str(obj)
+
+The application deserializes data directly from an HTTP request using pickle.
+
+Because pickle can execute code during deserialization, accepting untrusted pickle data is unsafe.
+
+### 4.2 Unsafe YAML Loading
+
+Example:
+
+    import yaml
+
+    def load_config(user_data):
+        return yaml.load(user_data, Loader=yaml.Loader)
+
+The application uses a YAML loader capable of constructing Python objects.
+
+If the input is untrusted, this may introduce a deserialization vulnerability.
+
+The scanner should inspect the selected loader and the origin of the input.
+
+## 5. Safe Patterns
+
+### 5.1 Use Safer Serialization Formats
+
+For data exchanged with untrusted sources, prefer formats such as JSON when complex object reconstruction is unnecessary.
+
+Example:
+
+    import json
+
+    data = '{"username": "alice", "role": "user"}'
+
+    parsed_data = json.loads(data)
+
+JSON parsing does not automatically reconstruct arbitrary Python objects.
+
+However, the application must still validate the parsed data.
+
+### 5.2 Safe YAML Loading
+
+Use yaml.safe_load() for untrusted YAML input.
+
+Example:
+
+    import yaml
+
+    def load_config(user_data):
+        return yaml.safe_load(user_data)
+
+This prevents the construction of arbitrary Python objects through the unsafe YAML loading mechanisms.
+
+### 5.3 Validate Deserialized Data
+
+After parsing, validate:
+
+- Expected data types.
+- Required fields.
+- Permitted values.
+- Data size.
+- Nested object structures.
+- Application-specific constraints.
+
+### 5.4 Avoid Untrusted Pickle Data
+
+Do not deserialize pickle data received from untrusted users or external sources.
+
+Use safer data formats when possible.
+
+## 6. Relevant Python Functions
+
+The scanner should recognize:
+
+### Pickle
+
+- pickle.load()
+- pickle.loads()
+
+### YAML
+
+- yaml.load()
+- yaml.unsafe_load()
+- yaml.full_load()
+- yaml.safe_load()
+
+### JSON
+
+- json.load()
+- json.loads()
+
+### Other Serialization Libraries
+
+- marshal.loads()
+- shelve.open()
+- dill.loads()
+
+These functions have different security properties.
+
+The scanner must consider the selected library, loading configuration, and input trust level.
+
+## 7. False Positives
+
+The scanner should not automatically classify every deserialization operation as vulnerable.
+
+Consider:
+
+- Data originates from a trusted and controlled source.
+- JSON is used without unsafe object reconstruction.
+- YAML uses safe_load().
+- Input is validated before being processed.
+- Serialized data is protected against unauthorized modification.
+- A

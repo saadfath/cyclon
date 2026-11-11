@@ -1,0 +1,209 @@
+# Python Subprocess Security
+
+## 1. Overview
+
+Python's subprocess module allows applications to execute external programs and system commands.
+
+It is commonly used for interacting with operating system utilities, running scripts, and managing external processes.
+
+Security problems can occur when untrusted user input is passed to subprocess functions without appropriate validation and command execution controls.
+
+Improper use may introduce command injection vulnerabilities, unauthorized command execution, or unintended process behavior.
+
+The subprocess module is not inherently insecure. Its security depends on how commands and arguments are constructed and executed.
+
+## 2. Common Risk Categories
+
+### 2.1 Shell Command Injection
+
+Occurs when untrusted input is incorporated into a shell command and interpreted as part of the command syntax.
+
+This is particularly concerning when shell execution is enabled.
+
+### 2.2 Unsafe Argument Construction
+
+Occurs when an application constructs command arguments using untrusted input without validating whether those arguments are appropriate.
+
+Even when shell execution is disabled, untrusted arguments may influence the behavior of the executed program.
+
+### 2.3 Unrestricted Executable Selection
+
+Occurs when users can control which executable the application launches.
+
+This may allow unintended programs to be executed.
+
+### 2.4 Insecure Process Permissions
+
+Occurs when an application launches external processes with excessive privileges or an unnecessarily broad execution environment.
+
+## 3. Detection Indicators
+
+The scanner should investigate:
+
+- subprocess functions receiving user-controlled input.
+- Use of shell=True with dynamically constructed commands.
+- Commands constructed through string concatenation or interpolation.
+- User-controlled executable paths.
+- User-controlled command arguments without validation.
+- External process execution inside request handlers.
+- Excessive process privileges.
+- Missing execution timeouts.
+- Sensitive environment variables exposed to child processes.
+
+## 4. Potentially Vulnerable Patterns
+
+### 4.1 subprocess.run()
+
+Example:
+
+    import subprocess
+
+    def execute_command(user_input):
+        command = "ping " + user_input
+        subprocess.run(command, shell=True)
+
+The application combines user-controlled input with a shell command.
+
+Because shell interpretation is enabled, this creates a potential command injection vulnerability.
+
+### 4.2 subprocess.Popen()
+
+Example:
+
+    import subprocess
+
+    def execute_command(user_input):
+        process = subprocess.Popen(
+            "tool " + user_input,
+            shell=True
+        )
+
+The application constructs a shell command using externally controlled input.
+
+This should be investigated as a potential command injection vulnerability.
+
+### 4.3 Dynamic Executable Selection
+
+Example:
+
+    import subprocess
+
+    def run_tool(program):
+        subprocess.run([program])
+
+The executable itself is controlled by the input.
+
+This may allow unintended programs to be launched.
+
+The scanner should determine whether the input is externally controllable and whether executable selection is restricted.
+
+## 5. Safe Patterns
+
+### 5.1 Avoid Shell Interpretation
+
+Prefer passing commands and arguments as separate elements in a list.
+
+Example:
+
+    import subprocess
+
+    subprocess.run(
+        ["ping", "-c", "1", "127.0.0.1"],
+        shell=False,
+        check=True,
+        timeout=5
+    )
+
+This avoids shell interpretation of the arguments.
+
+### 5.2 Validate Arguments
+
+Validate user-controlled arguments against the expected format and permitted values.
+
+Do not assume that disabling shell=True makes every argument safe.
+
+### 5.3 Restrict Executable Selection
+
+Use fixed executable paths or a controlled allowlist of permitted programs.
+
+Avoid allowing users to select arbitrary executables.
+
+### 5.4 Apply Process Restrictions
+
+Consider:
+
+- Running processes with the minimum required permissions.
+- Setting execution timeouts.
+- Restricting environment variables.
+- Handling subprocess errors.
+- Limiting available system resources.
+
+## 6. Relevant Python Functions
+
+The scanner should recognize the following functions and APIs:
+
+### subprocess module
+
+- subprocess.run()
+- subprocess.Popen()
+- subprocess.call()
+- subprocess.check_call()
+- subprocess.check_output()
+- subprocess.getoutput()
+- subprocess.getstatusoutput()
+
+### Other execution-related functions
+
+- os.system()
+- os.popen()
+- os.execv()
+- os.execve()
+- os.spawnv()
+
+These functions require different analysis depending on their execution behavior and argument handling.
+
+Their presence alone does not prove a vulnerability.
+
+## 7. False Positives
+
+The scanner should not automatically report every subprocess call as vulnerable.
+
+Consider:
+
+- Commands use fixed executable names.
+- Arguments are passed as separate list elements.
+- shell=False is used.
+- Input is validated against strict expected values.
+- Executable selection is restricted.
+- The subprocess call is not reachable through externally controlled input.
+- Appropriate permissions and execution restrictions are applied.
+
+The scanner should analyze the complete data flow from input source to process execution.
+
+## 8. Severity Assessment
+
+Severity depends on:
+
+- Whether external users can control the command.
+- Whether shell interpretation is enabled.
+- Whether executable selection is restricted.
+- Which permissions the application process has.
+- Whether the process can access sensitive resources.
+- Whether the execution is remotely accessible.
+
+Typical severity: Medium to Critical.
+
+The scanner should distinguish between shell command injection, unsafe argument handling, and unrestricted executable selection.
+
+## 9. Remediation
+
+Recommended fixes:
+
+1. Avoid shell=True whenever possible.
+2. Pass commands and arguments separately.
+3. Validate arguments against strict expected formats.
+4. Restrict executable selection.
+5. Use fixed executable paths where appropriate.
+6. Apply least-privilege process permissions.
+7. Set execution timeouts.
+8. Handle subprocess
