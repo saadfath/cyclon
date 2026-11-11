@@ -1,0 +1,175 @@
+# Cross-Site Scripting (XSS)
+
+## 1. Overview
+
+Cross-Site Scripting (XSS) is a web security vulnerability that occurs when an application includes untrusted data in a web page without properly validating or encoding it.
+
+An attacker may be able to inject malicious client-side content into a page. When another user views that page, the browser may interpret the injected content as executable code.
+
+XSS primarily affects applications that generate HTML dynamically or display user-controlled data.
+
+## 2. Common Types
+
+### 2.1 Reflected XSS
+
+Reflected XSS occurs when an application receives untrusted input, includes it in an HTTP response, and returns it to the user's browser without appropriate output encoding.
+
+The injected content is generally delivered through a request, such as a URL parameter.
+
+### 2.2 Stored XSS
+
+Stored XSS occurs when an application saves untrusted input, such as comments or profile information, and later displays it to other users without appropriate output encoding.
+
+The unsafe content persists in the application.
+
+### 2.3 DOM-Based XSS
+
+DOM-Based XSS occurs when client-side JavaScript processes untrusted data and inserts it into the DOM using unsafe operations.
+
+The vulnerability can exist entirely within browser-side code without requiring the server to generate an unsafe response.
+
+## 3. Detection Indicators
+
+The scanner should investigate the following patterns:
+
+- User-controlled input inserted directly into HTML.
+- Untrusted data passed to dangerous DOM manipulation methods.
+- Dynamic HTML generation using untrusted variables.
+- Missing context-appropriate output encoding.
+- User input rendered inside JavaScript or HTML attributes without proper encoding.
+- Framework features that explicitly bypass automatic escaping.
+
+## 4. Potentially Vulnerable Patterns
+
+### Python Web Applications
+
+Investigate situations where user-controlled input is passed directly into HTML responses.
+
+Example:
+
+    from flask import Flask, request
+
+    app = Flask(__name__)
+
+    @app.route("/search")
+    def search():
+        query = request.args.get("q", "")
+        return "<h1>Search: " + query + "</h1>"
+
+The application inserts request-controlled data directly into an HTML response.
+
+This is a potential reflected XSS vulnerability.
+
+### JavaScript DOM Manipulation
+
+Investigate unsafe use of:
+
+- innerHTML
+- outerHTML
+- insertAdjacentHTML
+- document.write()
+
+These operations require additional scrutiny when their arguments contain untrusted data.
+
+Example:
+
+    const userInput = location.search;
+    document.getElementById("output").innerHTML = userInput;
+
+The application inserts URL-controlled data into the DOM as HTML.
+
+## 5. Safe Patterns
+
+### Context-Aware Output Encoding
+
+Encode untrusted data according to the context in which it will be displayed.
+
+For example, HTML text content requires HTML encoding.
+
+### Safe DOM Manipulation
+
+Prefer textContent when inserting plain text into an HTML element.
+
+Example:
+
+    const userInput = location.search;
+    document.getElementById("output").textContent = userInput;
+
+### Template Auto-Escaping
+
+Use web frameworks and template engines that automatically escape untrusted variables.
+
+Avoid disabling automatic escaping unless there is a well-reviewed security requirement.
+
+## 6. False Positives
+
+The scanner must not automatically classify every occurrence of a potentially dangerous function as an XSS vulnerability.
+
+Consider these situations:
+
+- The input is trusted and cannot be controlled externally.
+- Data is properly encoded before reaching the output.
+- The framework automatically escapes the relevant output context.
+- innerHTML receives a constant, trusted HTML string.
+- A sanitization library is correctly configured and applied.
+- The input is inserted as plain text rather than interpreted as HTML.
+
+A detection should consider the complete data flow from input source to output sink.
+
+## 7. Severity Assessment
+
+Severity depends on several factors:
+
+- Whether external users can control the input.
+- Whether the vulnerability is stored, reflected, or DOM-based.
+- Whether authentication is required.
+- Which users can access the affected page.
+- Whether sensitive application functionality is exposed.
+
+Typical severity: Medium to High.
+
+The scanner should not assign a definitive severity based only on the presence of a potentially unsafe function.
+
+## 8. Remediation
+
+Recommended fixes:
+
+1. Apply context-aware output encoding.
+2. Use safe DOM APIs such as textContent for plain text.
+3. Enable automatic template escaping.
+4. Avoid inserting untrusted data directly into HTML.
+5. Use a maintained HTML sanitization library when HTML input is genuinely required.
+6. Apply a suitable Content Security Policy (CSP) as an additional security layer.
+
+## 9. CWE References
+
+- CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting').
+
+## 10. Scanner Output Fields
+
+When reporting a potential XSS vulnerability, provide:
+
+- vulnerability: Cross-Site Scripting (XSS)
+- vulnerability_type: Reflected / Stored / DOM-Based / Unknown
+- file: Source file containing the finding
+- location: Relevant line number or code location
+- evidence: The relevant code fragment
+- input_source: Where the untrusted data originates
+- output_sink: Where the data is rendered
+- explanation: Why the data flow may be unsafe
+- severity: Estimated severity
+- confidence: Confidence in the finding
+- false_positive_reason: Possible reasons the finding is not exploitable
+- remediation: Recommended correction
+- cwe: CWE-79
+
+## 11. References
+
+- OWASP Cross Site Scripting Prevention Cheat Sheet
+  https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html
+
+- OWASP Cross Site Scripting (XSS)
+  https://owasp.org/www-community/attacks/xss/
+
+- CWE-79
+  https://cwe.mitre.org/data/definitions/79.html
