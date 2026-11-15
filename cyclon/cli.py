@@ -12,6 +12,7 @@ from .config import (
     get_api_keys, get_model, get_models, get_base_url, set_api_key, set_model, load_config, save_config,
 )
 from .filters import collect_files, DEFAULT_EXTENSIONS
+from .knowledge import load_knowledge
 from .scanner import scan_agents, ScanResult
 import webbrowser
 from .grok import GrokClient, GrokError
@@ -75,7 +76,7 @@ def _render(result: ScanResult, as_json: bool):
 
 
 @click.group()
-@click.version_option("0.1.0", prog_name="cyclon")
+@click.version_option("0.2.0", prog_name="cyclon")
 def cli():
     """cyclon - scan your code for bugs using the Grok (xAI) API."""
 
@@ -100,8 +101,13 @@ def cli():
 @click.option("--clear-cache", is_flag=True, help="Clear scan cache before running.")
 @click.option("--agents", default=None, help="Comma-separated agent names (optional).")
 @click.option("--events", is_flag=True, help="Emit machine-readable JSONL progress events on stderr.")
+@click.option("--knowledge/--no-knowledge", "use_knowledge", default=True,
+              help="Ground findings in the bundled vulnerability knowledge base.")
+@click.option("--knowledge-dir", default=None, type=click.Path(),
+              help="Directory containing Markdown knowledge files.")
 def scan_cmd(path, output, model, extensions, max_size, concurrency, as_json, dry_run,
-             includes, excludes, extra_prompt, keys, models, html_path, no_open, no_cache, clear_cache, agents, events):
+             includes, excludes, extra_prompt, keys, models, html_path, no_open, no_cache, clear_cache, agents, events,
+             use_knowledge, knowledge_dir):
     """Scan PATH (file or directory) for bugs."""
     root = Path(path).resolve()
     ext_set = None
@@ -182,6 +188,21 @@ def scan_cmd(path, output, model, extensions, max_size, concurrency, as_json, dr
         f = focuses[i] if i < len(focuses) else "Perform a thorough code review."
         system_prompts.append(sys_prompt + "\n\nSpecialization: " + f)
 
+    kb = None
+    if use_knowledge:
+        kb = load_knowledge(knowledge_dir)
+        if not kb.docs:
+            click.echo(
+                "Warning: vulnerability knowledge base not found; scanning without it.",
+                err=True,
+            )
+        else:
+            click.echo(
+                f"Knowledge base: {len(kb.vulnerabilities)} document(s) "
+                f"from {kb.source}",
+                err=True,
+            )
+
     if events:
         import threading
         event_lock = threading.Lock()
@@ -216,7 +237,7 @@ def scan_cmd(path, output, model, extensions, max_size, concurrency, as_json, dr
         root, clients, agent_names=agent_names, extensions=None, max_size=max_size,
         concurrency=concurrency, progress=progress, system_prompt=sys_prompt,
         system_prompts=system_prompts, files=files, split_work=True, use_cache=use_cache,
-        event=emit,
+        event=emit, knowledge=kb,
     )
 
     _render(result, as_json)
@@ -249,6 +270,52 @@ def scan_cmd(path, output, model, extensions, max_size, concurrency, as_json, dr
         Path(output).write_text(json.dumps(out_obj, indent=2))
         click.echo(f"Report written to {output}", err=True)
 
+
+
+@cli.command("knowledge")
+@click.argument("doc_id", required=False)
+@click.option("--dir", "directory", default=None, type=click.Path(),
+              help="Directory containing Markdown knowledge files.")
+@click.option("--json", "as_json", is_flag=True, help="Print document metadata as JSON.")
+def knowledge_cmd(doc_id, directory, as_json):
+    """List the vulnerability knowledge base, or show one DOC_ID."""
+    kb = load_knowledge(directory)
+    if not kb.docs:
+        click.echo(
+            "No knowledge base found. Set CYCLON_KB_DIR or pass --dir.", err=True
+        )
+        sys.exit(1)
+    if doc_id:
+        doc = kb.get(doc_id)
+        if doc is None:
+            click.echo(f"Unknown document: {doc_id}", err=True)
+            click.echo("Available: " + ", ".join(d.id for d in kb.docs), err=True)
+            sys.exit(1)
+        if as_json:
+            print(json.dumps({
+                "id": doc.id, "title": doc.title, "cwe": doc.cwe,
+                "severity": doc.severity, "path": str(doc.path),
+            }, indent=2))
+        else:
+            click.echo(doc.body.strip())
+        return
+    if as_json:
+        print(json.dumps([
+            {
+                "id": d.id, "title": d.title, "kind": d.kind,
+                "cwe": d.cwe, "severity": d.severity,
+            }
+            for d in kb.docs
+        ], indent=2))
+        return
+    click.echo(f"Knowledge base: {kb.source}")
+    click.echo(
+        f"{len(kb.vulnerabilities)} vulnerability document(s), "
+        f"{len(kb.guidelines())} guideline(s)"
+    )
+    for d in kb.docs:
+        tag = "guideline" if d.is_guideline else (d.cwe or "vulnerability")
+        click.echo(f"  {d.id:38} {tag:18} {d.title}")
 
 
 def _banner():

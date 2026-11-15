@@ -9,6 +9,7 @@ from typing import Callable
 
 from .filters import collect_files
 from .grok import GrokClient, SYSTEM_PROMPT as DEFAULT_SYSTEM_PROMPT, parse_json_array
+from .knowledge import KnowledgeBase, language_for_path
 
 CHUNK_CHARS = 9000
 OVERLAP = 400
@@ -117,7 +118,15 @@ def _chunks(text: str) -> list[tuple[int, str]]:
     return chunks
 
 
-def scan_file(client: GrokClient, path: Path, root: Path, system_prompt: str | None = None, agent: str = "", on_finding: Callable[[Finding], None] | None = None) -> tuple[list[Finding], str | None]:
+def scan_file(
+    client: GrokClient,
+    path: Path,
+    root: Path,
+    system_prompt: str | None = None,
+    agent: str = "",
+    on_finding: Callable[[Finding], None] | None = None,
+    knowledge: KnowledgeBase | None = None,
+) -> tuple[list[Finding], str | None]:
     if system_prompt is None:
         system_prompt = DEFAULT_SYSTEM_PROMPT
     try:
@@ -125,17 +134,32 @@ def scan_file(client: GrokClient, path: Path, root: Path, system_prompt: str | N
     except OSError as e:
         return [], f"{path}: read error {e}"
     rel = str(path.relative_to(root)) if root.is_dir() else str(path)
+    language = language_for_path(path)
     findings: list[Finding] = []
     chunks = _chunks(content)
     for start_line, chunk in chunks:
         numbered = "\n".join(
             f"{i}: {ln}" for i, ln in enumerate(chunk.splitlines(), start=start_line)
         )
+        reference = ""
+        if knowledge is not None:
+            reference = knowledge.render(knowledge.retrieve(chunk, language=language))
+        instruction = (
+            "Analyze for bugs. Return JSON array."
+            if not reference
+            else (
+                "Analyze for bugs and security issues. Use the reference knowledge "
+                "below to judge severity and rule out false positives, but only report "
+                "issues you can justify from the code shown. Do not invent CVEs, CWEs, "
+                "versions or scores that the reference does not state. Return JSON array."
+            )
+        )
         user_msg = (
             f"File: {rel}\n"
             f"Chunk starts at line {start_line}.\n"
             f"```\n{numbered}\n```\n"
-            "Analyze for bugs. Return JSON array."
+            + (f"\n{reference}\n" if reference else "")
+            + instruction
         )
         messages = [
             {"role": "system", "content": system_prompt},
@@ -175,6 +199,7 @@ def scan(
     progress: Callable[[str], None] | None = None,
     system_prompt: str | None = None,
     agent: str = "",
+    knowledge: KnowledgeBase | None = None,
 ) -> ScanResult:
     if system_prompt is None:
         system_prompt = DEFAULT_SYSTEM_PROMPT
@@ -187,14 +212,23 @@ def scan(
         for p in files:
             if progress:
                 progress(f"Scanning {p}")
-            fs, err = scan_file(client, p, root if root.is_dir() else p.parent, system_prompt=system_prompt, agent=agent)
+            fs, err = scan_file(
+                client, p, root if root.is_dir() else p.parent,
+                system_prompt=system_prompt, agent=agent, knowledge=knowledge,
+            )
             result.files_scanned += 1
             result.findings.extend(fs)
             if err:
                 result.errors.append(err)
     else:
         with ThreadPoolExecutor(max_workers=concurrency) as ex:
-            futures = {ex.submit(scan_file, client, p, root if root.is_dir() else p.parent, system_prompt, agent): p for p in files}
+            futures = {
+                ex.submit(
+                    scan_file, client, p, root if root.is_dir() else p.parent,
+                    system_prompt, agent, None, knowledge,
+                ): p
+                for p in files
+            }
             for fut in as_completed(futures):
                 p = futures[fut]
                 if progress:
@@ -221,6 +255,7 @@ def scan_agents(
     split_work: bool = False,
     use_cache: bool = True,
     event: Callable[[dict], None] | None = None,
+    knowledge: KnowledgeBase | None = None,
 ) -> ScanResult:
     if system_prompt is None:
         system_prompt = DEFAULT_SYSTEM_PROMPT
@@ -239,6 +274,7 @@ def scan_agents(
         emit({
             "type": "start", "root": str(root), "files": len(files),
             "agents": list(agent_names), "models": [c.model for c in clients],
+            "knowledge": len(knowledge.vulnerabilities) if knowledge else 0,
         })
         emit({"type": "done", "files_scanned": len(files), "findings": 0, "errors": 0})
         return result
@@ -246,6 +282,7 @@ def scan_agents(
     emit({
         "type": "start", "root": str(root), "files": len(files),
         "agents": list(agent_names), "models": [c.model for c in clients],
+        "knowledge": len(knowledge.vulnerabilities) if knowledge else 0,
     })
 
     cache = _load_cache() if use_cache else {"entries": {}}
@@ -284,7 +321,10 @@ def scan_agents(
         def on_finding(f: Finding) -> None:
             emit({"type": "finding", "file": rel, "agent": agent, "finding": _finding_to_dict(f)})
 
-        fs, err = scan_file(client, p, scan_root, system_prompt=sp, agent=agent, on_finding=on_finding)
+        fs, err = scan_file(
+            client, p, scan_root, system_prompt=sp, agent=agent,
+            on_finding=on_finding, knowledge=knowledge,
+        )
         if err:
             emit({"type": "error", "file": rel, "agent": agent, "message": err})
         emit({"type": "file_done", "file": rel, "agent": agent, "count": len(fs)})
